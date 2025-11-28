@@ -1,6 +1,16 @@
 import os
 from typing import Optional
-from PyPDF2 import PdfReader
+from pypdf import PdfReader
+
+# Optional image/OCR support
+try:
+    from PIL import Image
+    import pytesseract
+    _OCR_AVAILABLE = True
+except Exception:
+    Image = None  # type: ignore
+    pytesseract = None  # type: ignore
+    _OCR_AVAILABLE = False
 
 
 def extract_text_from_file(path: str, max_chars: int = 5000) -> Optional[str]:
@@ -33,6 +43,15 @@ def extract_text_from_file(path: str, max_chars: int = 5000) -> Optional[str]:
             except Exception:
                 return None
 
+        # Image files: try OCR if available
+        if ext in ('.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.tif'):
+            if not _OCR_AVAILABLE:
+                return None
+            try:
+                return extract_text_from_image(path, max_chars=max_chars)
+            except Exception:
+                return None
+
     except Exception:
         return None
 
@@ -61,3 +80,67 @@ def sample_texts_in_folder(folder_path: str, max_files: int = 8, chars_per_file:
             break
 
     return samples
+
+
+def extract_text_from_image(path: str, max_chars: int = 2000) -> Optional[str]:
+    """Use pytesseract to OCR an image and return extracted text (truncated)."""
+    if not _OCR_AVAILABLE:
+        return None
+    try:
+        img = Image.open(path)
+        text = pytesseract.image_to_string(img)
+        if not text:
+            return None
+        return text[:max_chars]
+    except Exception:
+        return None
+
+
+def extract_exif(path: str) -> dict:
+    """Return basic EXIF metadata for an image (empty dict if not available)."""
+    if Image is None:
+        return {}
+    try:
+        img = Image.open(path)
+        exif = img.getexif()
+        if not exif:
+            return {}
+        # Convert to simple dict of numeric keys to values
+        return {k: exif.get(k) for k in exif}
+    except Exception:
+        return {}
+
+
+# Optional semantic image labeling (CLIP) — used when OCR returns nothing
+try:
+    from transformers import CLIPProcessor, CLIPModel
+    import torch
+    _CLIP_AVAILABLE = True
+except Exception:
+    CLIPProcessor = None  # type: ignore
+    CLIPModel = None  # type: ignore
+    torch = None  # type: ignore
+    _CLIP_AVAILABLE = False
+
+
+def label_image_semantic(path: str, top_k: int = 5) -> list[str]:
+    """Return simple text labels for an image using CLIP if available.
+
+    This is optional and only runs when CLIP is installed. It returns a list of
+    short labels describing the image contents.
+    """
+    if not _CLIP_AVAILABLE:
+        return []
+    try:
+        processor = CLIPProcessor.from_pretrained('openai/clip-vit-base-patch32')
+        model = CLIPModel.from_pretrained('openai/clip-vit-base-patch32')
+        image = Image.open(path).convert('RGB')
+        inputs = processor(images=image, return_tensors='pt')
+        with torch.no_grad():
+            outputs = model.get_image_features(**inputs)
+        # This is a placeholder: CLIP gives embeddings — to get labels we'd need
+        # to compare to a candidate set. For now, return an empty list to keep
+        # the function safe. Replace with a candidate-label approach as needed.
+        return []
+    except Exception:
+        return []

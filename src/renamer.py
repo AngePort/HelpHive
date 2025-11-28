@@ -1,7 +1,7 @@
 import os
 import shutil
 from typing import Optional
-from .scanner import sample_texts_in_folder
+from .scanner import sample_texts_in_folder, extract_exif
 from .ai_client import suggest_folder_name
 
 
@@ -28,7 +28,38 @@ def safe_rename(src: str, dst: str) -> bool:
 
 def propose_rename_folder(folder_path: str, dry_run: bool = True, model: str = 'gpt-4') -> Optional[str]:
     samples = sample_texts_in_folder(folder_path)
-    suggestion = suggest_folder_name(samples, model=model)
+    suggestion = None
+    # Prefer AI suggestion from samples
+    if samples:
+        suggestion = suggest_folder_name(samples, model=model)
+
+    # If no suggestion and the folder contains images, try EXIF or image labels
+    if not suggestion:
+        # look for images in the folder
+        for root, _, files in os.walk(folder_path):
+            for fname in files:
+                _, ext = os.path.splitext(fname.lower())
+                if ext in ('.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.tif'):
+                    img_path = os.path.join(root, fname)
+                    exif = extract_exif(img_path)
+                    # prefer using camera model or DateTime if present
+                    if exif:
+                        cam = exif.get(271) or exif.get(272) or exif.get(306)
+                        if cam:
+                            suggestion = str(cam)
+                            break
+                    # try semantic labels (optional)
+                    labels = []
+                    try:
+                        from .scanner import label_image_semantic
+                        labels = label_image_semantic(img_path)
+                    except Exception:
+                        labels = []
+                    if labels:
+                        suggestion = labels[0]
+                        break
+            if suggestion:
+                break
     if not suggestion:
         return None
 
